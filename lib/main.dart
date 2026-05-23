@@ -776,7 +776,7 @@ class ApiSession {
 
 class ApiService {
   // Chrome en la misma computadora donde corre FastAPI.
-  static const String apiBase = 'http://127.0.0.1:8000';
+  static const String apiBase = 'https://recolector-inteligente-hackaton-production.up.railway.app';
 
   static Future<Map<String, dynamic>> login({
     required String email,
