@@ -331,6 +331,65 @@ class Servicio {
   }
 }
 
+
+class AlertaOperativa {
+  final String id;
+  final String tipo;
+  final String titulo;
+  final String mensaje;
+  final String routeId;
+  final String rutaNombre;
+  final int truckId;
+  final String operador;
+  final String estado;
+  final String fecha;
+  final int prioridad;
+
+  AlertaOperativa({
+    required this.id,
+    required this.tipo,
+    required this.titulo,
+    required this.mensaje,
+    required this.routeId,
+    required this.rutaNombre,
+    required this.truckId,
+    required this.operador,
+    required this.estado,
+    required this.fecha,
+    required this.prioridad,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'tipo': tipo,
+        'titulo': titulo,
+        'mensaje': mensaje,
+        'routeId': routeId,
+        'rutaNombre': rutaNombre,
+        'truckId': truckId,
+        'operador': operador,
+        'estado': estado,
+        'fecha': fecha,
+        'prioridad': prioridad,
+      };
+
+  factory AlertaOperativa.fromJson(Map<String, dynamic> json) {
+    return AlertaOperativa(
+      id: json['id'] ?? '',
+      tipo: json['tipo'] ?? 'INFO',
+      titulo: json['titulo'] ?? '',
+      mensaje: json['mensaje'] ?? '',
+      routeId: json['routeId'] ?? '',
+      rutaNombre: json['rutaNombre'] ?? '',
+      truckId: json['truckId'] ?? 0,
+      operador: json['operador'] ?? 'Operador',
+      estado: json['estado'] ?? 'Nueva',
+      fecha: json['fecha'] ?? '',
+      prioridad: json['prioridad'] ?? 1,
+    );
+  }
+}
+
 // =======================================================
 // REPOSITORIO LOCAL
 // =======================================================
@@ -472,6 +531,39 @@ class Repo {
 
     return list.map((e) => Servicio.fromJson(Map<String, dynamic>.from(e))).toList();
   }
+
+  static Future<void> guardarAlertaOperativa(AlertaOperativa alerta) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('alertas_operativas') ?? '[]';
+    final list = jsonDecode(raw) as List;
+
+    list.insert(0, alerta.toJson());
+
+    await prefs.setString('alertas_operativas', jsonEncode(list.take(30).toList()));
+  }
+
+  static Future<List<AlertaOperativa>> cargarAlertasOperativas() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('alertas_operativas') ?? '[]';
+    final list = jsonDecode(raw) as List;
+
+    return list
+        .map((e) => AlertaOperativa.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  static Future<void> limpiarAlertasOperativas() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('alertas_operativas');
+  }
+
+  static String fechaCorta(DateTime now) {
+    final d = now.day.toString().padLeft(2, '0');
+    final m = now.month.toString().padLeft(2, '0');
+    final h = now.hour.toString().padLeft(2, '0');
+    final min = now.minute.toString().padLeft(2, '0');
+    return '$d/$m ${h}:${min}';
+  }
 }
 
 // =======================================================
@@ -579,9 +671,28 @@ class _LoginPageState extends State<LoginPage> {
   final pass = TextEditingController();
 
   void entrar() {
-    if (email.text.trim().isEmpty || pass.text.trim().isEmpty) {
+    final correo = email.text.trim().toLowerCase();
+    final password = pass.text.trim();
+
+    if (correo.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Ingresa correo y contraseña')),
+      );
+      return;
+    }
+
+    if (correo == 'operador@demo.com' && password == '123456') {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const OperadorPage()),
+      );
+      return;
+    }
+
+    if (correo == 'admin@demo.com' && password == '123456') {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const AdminConceptPage()),
       );
       return;
     }
@@ -665,7 +776,22 @@ class _LoginPageState extends State<LoginPage> {
                       email.text = 'demo@correo.com';
                       pass.text = '123456';
                     },
-                    child: const Text('Usar cuenta demo'),
+                    child: const Text('Usar cuenta ciudadano'),
+                  ),
+                  TextButton.icon(
+                    onPressed: () {
+                      email.text = 'operador@demo.com';
+                      pass.text = '123456';
+                    },
+                    icon: const Icon(Icons.engineering),
+                    label: const Text('Usar cuenta operador'),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      email.text = 'admin@demo.com';
+                      pass.text = '123456';
+                    },
+                    child: const Text('Ver módulo administrador propuesto'),
                   ),
                 ],
               ),
@@ -691,6 +817,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   List<Domicilio> domicilios = [];
   List<Servicio> servicios = [];
+  List<AlertaOperativa> alertas = [];
 
   @override
   void initState() {
@@ -701,12 +828,14 @@ class _HomePageState extends State<HomePage> {
   Future<void> cargar() async {
     final d = await Repo.cargarDomicilios();
     final s = await Repo.cargarServicios();
+    final a = await Repo.cargarAlertasOperativas();
 
     if (!mounted) return;
 
     setState(() {
       domicilios = d;
       servicios = s;
+      alertas = a;
     });
   }
 
@@ -777,6 +906,41 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
             ),
+            if (alertas.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              AppCard(
+                color: alertas.first.prioridad >= 3 ? const Color(0xFFFFEBEE) : const Color(0xFFFFF8E1),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      alertas.first.prioridad >= 3 ? Icons.warning_amber : Icons.info,
+                      color: alertas.first.prioridad >= 3 ? AppColors.red : AppColors.orange,
+                      size: 42,
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Alerta operativa reciente', style: TextStyle(fontWeight: FontWeight.w700)),
+                          Text(
+                            alertas.first.titulo,
+                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+                          ),
+                          Text(alertas.first.mensaje),
+                          const SizedBox(height: 6),
+                          Text(
+                            '${alertas.first.routeId} · Camión ${alertas.first.truckId} · ${alertas.first.fecha}',
+                            style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             Row(
               children: [
                 Expanded(
@@ -1942,6 +2106,647 @@ class _SeguimientoPageState extends State<SeguimientoPage> {
     );
   }
 }
+
+
+// =======================================================
+// OPERADOR / CHOFER
+// =======================================================
+
+class OperadorPage extends StatefulWidget {
+  const OperadorPage({super.key});
+
+  @override
+  State<OperadorPage> createState() => _OperadorPageState();
+}
+
+class _OperadorPageState extends State<OperadorPage> {
+  Timer? timer;
+  late List<RutaOficial> rutasAsignadas;
+  late RutaOficial rutaSeleccionada;
+  int paso = 0;
+  bool jornadaActiva = false;
+  String estadoRuta = 'Pendiente de iniciar';
+  List<AlertaOperativa> historial = [];
+
+  @override
+  void initState() {
+    super.initState();
+    final todas = Repo.rutas();
+    rutasAsignadas = todas.where((r) {
+      return r.routeId == 'RUTA-01' || r.routeId == 'RUTA-03' || r.routeId == 'RUTA-05';
+    }).toList();
+
+    rutaSeleccionada = rutasAsignadas.first;
+    cargarHistorial();
+  }
+
+  Future<void> cargarHistorial() async {
+    final lista = await Repo.cargarAlertasOperativas();
+    if (!mounted) return;
+    setState(() => historial = lista);
+  }
+
+  RoutePosition get posicionActual {
+    return rutaSeleccionada.positions[paso.clamp(0, rutaSeleccionada.positions.length - 1)];
+  }
+
+  double get progreso {
+    if (rutaSeleccionada.positions.isEmpty) return 0;
+    return (paso + 1) / rutaSeleccionada.positions.length;
+  }
+
+  String get horarioOperador {
+    final first = rutaSeleccionada.positions.first.timestamp;
+    final last = rutaSeleccionada.positions.last.timestamp;
+    final inicio = first.length >= 16 ? first.substring(11, 16) : '06:00';
+    final fin = last.length >= 16 ? last.substring(11, 16) : '08:00';
+    return '$inicio - $fin';
+  }
+
+  String get nombreOperador => 'Operador José Martínez';
+
+  Future<void> guardarEvento({
+    required String tipo,
+    required String titulo,
+    required String mensaje,
+    required int prioridad,
+    required String nuevoEstado,
+  }) async {
+    final now = DateTime.now();
+
+    final alerta = AlertaOperativa(
+      id: now.microsecondsSinceEpoch.toString(),
+      tipo: tipo,
+      titulo: titulo,
+      mensaje: mensaje,
+      routeId: rutaSeleccionada.routeId,
+      rutaNombre: rutaSeleccionada.name,
+      truckId: rutaSeleccionada.truckId,
+      operador: nombreOperador,
+      estado: 'Nueva',
+      fecha: Repo.fechaCorta(now),
+      prioridad: prioridad,
+    );
+
+    await Repo.guardarAlertaOperativa(alerta);
+
+    if (!mounted) return;
+
+    setState(() {
+      estadoRuta = nuevoEstado;
+    });
+
+    await cargarHistorial();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$titulo\n$mensaje'),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
+  Future<void> iniciarJornada() async {
+    timer?.cancel();
+
+    setState(() {
+      jornadaActiva = true;
+      paso = 0;
+      estadoRuta = 'Ruta iniciada';
+    });
+
+    await guardarEvento(
+      tipo: 'ROUTE_START',
+      titulo: 'Ruta iniciada por operador',
+      mensaje: 'El operador inició la jornada de ${rutaSeleccionada.routeId}.',
+      prioridad: 1,
+      nuevoEstado: 'Ruta iniciada',
+    );
+
+    timer = Timer.periodic(const Duration(seconds: 5), (t) {
+      if (!jornadaActiva) {
+        t.cancel();
+        return;
+      }
+
+      if (paso >= rutaSeleccionada.positions.length - 1) {
+        t.cancel();
+        finalizarJornada();
+        return;
+      }
+
+      setState(() => paso++);
+
+      if (posicionActual.positionId == 4) {
+        guardarEvento(
+          tipo: 'TRUCK_PROXIMITY',
+          titulo: 'Camión cercano a zona asignada',
+          mensaje: 'El operador reportó proximidad operativa para ${rutaSeleccionada.routeId}.',
+          prioridad: 2,
+          nuevoEstado: 'Camión cercano',
+        );
+      }
+    });
+  }
+
+  Future<void> reportarRetraso() async {
+    timer?.cancel();
+    setState(() => jornadaActiva = false);
+
+    await guardarEvento(
+      tipo: 'DELAY',
+      titulo: 'Retraso reportado',
+      mensaje: 'La ruta presenta un retraso aproximado de 25 minutos.',
+      prioridad: 2,
+      nuevoEstado: 'Retraso operativo',
+    );
+  }
+
+  Future<void> reportarAveria() async {
+    timer?.cancel();
+    setState(() => jornadaActiva = false);
+
+    await guardarEvento(
+      tipo: 'MECHANICAL_FAILURE',
+      titulo: 'Avería mecánica reportada',
+      mensaje: 'El camión ${rutaSeleccionada.truckId} presenta una falla mecánica. Se requiere apoyo logístico.',
+      prioridad: 3,
+      nuevoEstado: 'Avería mecánica',
+    );
+  }
+
+  Future<void> reportarIncidenciaLigera() async {
+    await guardarEvento(
+      tipo: 'INCIDENT',
+      titulo: 'Incidencia en ruta',
+      mensaje: 'Se registró una incidencia menor: obstrucción vial o punto con exceso de residuos.',
+      prioridad: 2,
+      nuevoEstado: 'Incidencia registrada',
+    );
+  }
+
+  Future<void> finalizarJornada() async {
+    timer?.cancel();
+
+    setState(() {
+      jornadaActiva = false;
+      paso = rutaSeleccionada.positions.length - 1;
+      estadoRuta = 'Servicio finalizado';
+    });
+
+    await guardarEvento(
+      tipo: 'ROUTE_COMPLETED',
+      titulo: 'Servicio finalizado',
+      mensaje: 'El operador finalizó la ruta ${rutaSeleccionada.routeId}.',
+      prioridad: 1,
+      nuevoEstado: 'Servicio finalizado',
+    );
+  }
+
+  void cambiarRuta(RutaOficial? ruta) {
+    if (ruta == null) return;
+    timer?.cancel();
+
+    setState(() {
+      rutaSeleccionada = ruta;
+      paso = 0;
+      jornadaActiva = false;
+      estadoRuta = 'Pendiente de iniciar';
+    });
+  }
+
+  Color colorEstado() {
+    if (estadoRuta.contains('Avería')) return AppColors.red;
+    if (estadoRuta.contains('Retraso') || estadoRuta.contains('Incidencia')) return AppColors.orange;
+    if (estadoRuta.contains('finalizado')) return Colors.blueGrey;
+    if (jornadaActiva) return AppColors.green;
+    return Colors.grey;
+  }
+
+  Widget statCard({
+    required IconData icon,
+    required String title,
+    required String value,
+    required Color color,
+  }) {
+    return Expanded(
+      child: AppCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: color, size: 28),
+            const SizedBox(height: 8),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget actionButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return SizedBox(
+      height: 58,
+      child: FilledButton.icon(
+        style: FilledButton.styleFrom(
+          backgroundColor: color,
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        ),
+        onPressed: onPressed,
+        icon: Icon(icon),
+        label: Text(label, style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800)),
+      ),
+    );
+  }
+
+  Widget timelineItem(int index) {
+    final p = rutaSeleccionada.positions[index];
+    final actual = index == paso;
+    final done = index < paso;
+
+    Color color = Colors.grey.shade300;
+    IconData icon = Icons.radio_button_unchecked;
+
+    if (done) {
+      color = AppColors.green;
+      icon = Icons.check;
+    }
+
+    if (actual) {
+      color = colorEstado();
+      icon = Icons.local_shipping;
+    }
+
+    String titulo = 'Punto operativo ${p.positionId}';
+    if (p.positionId == 1) titulo = 'Salida de base';
+    if (p.positionId == 2) titulo = 'Ruta en tránsito';
+    if (p.positionId == 4) titulo = 'Punto previo a zona ciudadana';
+    if (p.positionId == 5) titulo = 'Recolección principal';
+    if (p.positionId == 8) titulo = 'Retorno a base';
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Column(
+          children: [
+            CircleAvatar(
+              backgroundColor: color,
+              radius: 18,
+              child: Icon(icon, color: Colors.white, size: 18),
+            ),
+            if (index != rutaSeleccionada.positions.length - 1)
+              Container(
+                width: 4,
+                height: 42,
+                color: done ? AppColors.green : Colors.grey.shade300,
+              ),
+          ],
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  titulo,
+                  style: TextStyle(
+                    fontSize: actual ? 18.5 : 16.5,
+                    fontWeight: actual ? FontWeight.w900 : FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  'positionId ${p.positionId} · Velocidad ${p.speed} km/h',
+                  style: TextStyle(color: Colors.grey.shade700),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget alertaItem(AlertaOperativa alerta) {
+    Color color = AppColors.green;
+    IconData icon = Icons.check_circle;
+
+    if (alerta.prioridad == 2) {
+      color = AppColors.orange;
+      icon = Icons.timer;
+    }
+
+    if (alerta.prioridad >= 3) {
+      color = AppColors.red;
+      icon = Icons.warning_amber;
+    }
+
+    return Card(
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: color.withOpacity(0.12),
+          child: Icon(icon, color: color),
+        ),
+        title: Text(alerta.titulo, style: const TextStyle(fontWeight: FontWeight.w900)),
+        subtitle: Text('${alerta.routeId} · Camión ${alerta.truckId} · ${alerta.fecha}\n${alerta.mensaje}'),
+        isThreeLine: true,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final estadoColor = colorEstado();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Panel del operador'),
+        actions: [
+          IconButton(
+            tooltip: 'Cerrar sesión',
+            onPressed: () {
+              timer?.cancel();
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginPage()),
+              );
+            },
+            icon: const Icon(Icons.logout),
+          ),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: cargarHistorial,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            AppCard(
+              color: const Color(0xFFEAF6EA),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const CircleAvatar(
+                        radius: 32,
+                        backgroundColor: AppColors.green,
+                        child: Icon(Icons.engineering, color: Colors.white, size: 36),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(nombreOperador, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
+                            const Text('Turno operativo · Unidad municipal'),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<RutaOficial>(
+                    value: rutaSeleccionada,
+                    decoration: const InputDecoration(
+                      labelText: 'Ruta asignada',
+                      prefixIcon: Icon(Icons.route),
+                      fillColor: Colors.white,
+                    ),
+                    items: rutasAsignadas.map((r) {
+                      return DropdownMenuItem(
+                        value: r,
+                        child: Text('${r.routeId} · Camión ${r.truckId}', overflow: TextOverflow.ellipsis),
+                      );
+                    }).toList(),
+                    onChanged: cambiarRuta,
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: estadoColor.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: estadoColor.withOpacity(0.35)),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.sensors, color: estadoColor, size: 34),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Estado actual de la jornada', style: TextStyle(fontWeight: FontWeight.w700)),
+                              Text(
+                                estadoRuta,
+                                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: estadoColor),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            Row(
+              children: [
+                statCard(icon: Icons.local_shipping, title: 'Camión', value: '${rutaSeleccionada.truckId}', color: AppColors.green),
+                statCard(icon: Icons.schedule, title: 'Horario', value: horarioOperador, color: Colors.indigo),
+              ],
+            ),
+            Row(
+              children: [
+                statCard(icon: Icons.pin_drop, title: 'Punto', value: '${posicionActual.positionId}/8', color: AppColors.orange),
+                statCard(icon: Icons.speed, title: 'Velocidad', value: '${posicionActual.speed} km/h', color: Colors.blueGrey),
+              ],
+            ),
+
+            const SectionTitle('Control rápido', subtitle: 'Eventos que el operador puede enviar al sistema.'),
+            actionButton(
+              icon: Icons.play_arrow,
+              label: jornadaActiva ? 'Jornada en curso' : 'Iniciar jornada',
+              color: jornadaActiva ? Colors.grey : AppColors.green,
+              onPressed: jornadaActiva ? () {} : iniciarJornada,
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: actionButton(
+                    icon: Icons.timer,
+                    label: 'Retraso',
+                    color: AppColors.orange,
+                    onPressed: reportarRetraso,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: actionButton(
+                    icon: Icons.car_crash,
+                    label: 'Avería',
+                    color: AppColors.red,
+                    onPressed: reportarAveria,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 56,
+                    child: OutlinedButton.icon(
+                      onPressed: reportarIncidenciaLigera,
+                      icon: const Icon(Icons.report_problem),
+                      label: const Text('Incidencia'),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: SizedBox(
+                    height: 56,
+                    child: OutlinedButton.icon(
+                      onPressed: finalizarJornada,
+                      icon: const Icon(Icons.flag),
+                      label: const Text('Finalizar'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            const SectionTitle('Avance operativo', subtitle: 'Visible para el operador; el ciudadano solo recibe eventos y ETA.'),
+            AppCard(
+              child: Column(
+                children: [
+                  LinearProgressIndicator(value: progreso, minHeight: 12),
+                  const SizedBox(height: 12),
+                  Text(
+                    '${rutaSeleccionada.routeId} · ${rutaSeleccionada.name}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Horario de trabajo: $horarioOperador · Estado JSON: ${rutaSeleccionada.status}',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey.shade700),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            ...List.generate(rutaSeleccionada.positions.length, timelineItem),
+
+            const SectionTitle('Historial de alertas enviadas'),
+            if (historial.isEmpty)
+              const AppCard(child: Text('Aún no hay alertas operativas registradas.'))
+            else
+              ...historial.take(8).map(alertaItem),
+
+            const SizedBox(height: 18),
+            const Text(
+              'Diseño por roles: el operador reporta eventos operativos; el ciudadano recibe mensajes accionables sin rastrear el camión en tiempo real.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.black54),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =======================================================
+// ADMINISTRADOR CONCEPTUAL / FUTURO
+// =======================================================
+
+class AdminConceptPage extends StatelessWidget {
+  const AdminConceptPage({super.key});
+
+  Widget item(IconData icon, String title, String subtitle, Color color) {
+    return Card(
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        leading: CircleAvatar(
+          backgroundColor: color.withOpacity(0.12),
+          child: Icon(icon, color: color),
+        ),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+        subtitle: Text(subtitle),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Administrador'),
+        actions: [
+          IconButton(
+            onPressed: () {
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+            },
+            icon: const Icon(Icons.logout),
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          AppCard(
+            color: AppColors.softGreen,
+            child: Column(
+              children: const [
+                Icon(Icons.admin_panel_settings, size: 76, color: AppColors.green),
+                SizedBox(height: 12),
+                Text(
+                  'Módulo logístico propuesto',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'No se desarrolla en este MVP por alcance del hackathon, pero queda contemplado dentro de la arquitectura por roles.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 17, height: 1.35),
+                ),
+              ],
+            ),
+          ),
+          const SectionTitle('Funciones futuras'),
+          item(Icons.alt_route, 'Asignación de rutas', 'Crear, editar y asignar rutas por zona de cobertura.', AppColors.green),
+          item(Icons.local_shipping, 'Gestión de camiones', 'Asignar unidades, revisar disponibilidad y controlar mantenimientos.', Colors.indigo),
+          item(Icons.engineering, 'Asignación de operadores', 'Vincular choferes con camiones, turnos y rutas.', AppColors.orange),
+          item(Icons.analytics, 'Indicadores logísticos', 'Medir retrasos, cumplimiento, incidencias y calificaciones.', Colors.blueGrey),
+          item(Icons.security, 'Control RBAC', 'Separar permisos entre ciudadano, operador y administrador.', AppColors.red),
+        ],
+      ),
+    );
+  }
+}
+
 
 // =======================================================
 // BUZÓN
