@@ -557,6 +557,32 @@ class Repo {
     await prefs.remove('alertas_operativas');
   }
 
+  static Future<List<Map<String, dynamic>>> cargarSugerencias() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('sugerencias') ?? '[]';
+    final list = jsonDecode(raw) as List;
+
+    return list.map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  static bool emailValido(String value) {
+    final text = value.trim();
+    final regex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
+    return regex.hasMatch(text);
+  }
+
+  static bool direccionValida(String value) {
+    final text = value.trim();
+    final tieneLetras = RegExp(r'[A-Za-zÁÉÍÓÚáéíóúÑñ]').hasMatch(text);
+    final tieneNumero = RegExp(r'\d').hasMatch(text);
+    return text.length >= 8 && tieneLetras && tieneNumero;
+  }
+
+  static bool coloniaPermitida(String value) {
+    final text = normalizar(value.trim());
+    return colonias().any((c) => normalizar(c.colonia) == text);
+  }
+
   static String fechaCorta(DateTime now) {
     final d = now.day.toString().padLeft(2, '0');
     final m = now.month.toString().padLeft(2, '0');
@@ -692,7 +718,7 @@ class _LoginPageState extends State<LoginPage> {
     if (correo == 'admin@demo.com' && password == '123456') {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const AdminConceptPage()),
+        MaterialPageRoute(builder: (_) => const AdminPage()),
       );
       return;
     }
@@ -873,6 +899,16 @@ class _HomePageState extends State<HomePage> {
         title: const Text('Recolector Inteligente'),
         actions: [
           IconButton(onPressed: cargar, icon: const Icon(Icons.refresh)),
+          IconButton(
+            tooltip: 'Cerrar sesión',
+            onPressed: () {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginPage()),
+              );
+            },
+            icon: const Icon(Icons.logout),
+          ),
         ],
       ),
       body: RefreshIndicator(
@@ -1224,17 +1260,51 @@ class _DatosPageState extends State<DatosPage> with SingleTickerProviderStateMix
   }
 
   Future<void> guardarRegistro() async {
-    if (nombre.text.trim().isEmpty || telefono.text.trim().isEmpty) {
+    final nombreTxt = nombre.text.trim();
+    final telefonoTxt = telefono.text.trim();
+    final correoTxt = correo.text.trim();
+    final direccionTxt = direccionPrincipal.text.trim();
+    final coloniaTxt = coloniaPrincipal.text.trim();
+
+    if (nombreTxt.isEmpty || telefonoTxt.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Nombre y teléfono son obligatorios')),
       );
       return;
     }
 
+    if (!Repo.emailValido(correoTxt)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ingresa un correo válido. Ejemplo: usuario@correo.com')),
+      );
+      return;
+    }
+
+    if (!Repo.direccionValida(direccionTxt)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ingresa una dirección válida con calle y número.')),
+      );
+      return;
+    }
+
+    if (!Repo.coloniaPermitida(coloniaTxt)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selecciona una colonia válida de la lista oficial.')),
+      );
+      return;
+    }
+
+    if (latPrincipal == null || lngPrincipal == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selecciona tu domicilio en el mapa para validar la ubicación.')),
+      );
+      return;
+    }
+
     await Repo.guardarUsuario(
-      nombre: nombre.text.trim(),
-      telefono: telefono.text.trim(),
-      correo: correo.text.trim(),
+      nombre: nombreTxt,
+      telefono: telefonoTxt,
+      correo: correoTxt,
       rfc: rfc.text.trim(),
     );
 
@@ -1271,9 +1341,26 @@ class _DatosPageState extends State<DatosPage> with SingleTickerProviderStateMix
   }
 
   Future<void> agregarDomicilio() async {
-    if (direccionExtra.text.trim().isEmpty) {
+    final direccionTxt = direccionExtra.text.trim();
+    final coloniaTxt = coloniaExtra.text.trim();
+
+    if (!Repo.direccionValida(direccionTxt)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Escribe el domicilio a agregar')),
+        const SnackBar(content: Text('Escribe una dirección válida con calle y número.')),
+      );
+      return;
+    }
+
+    if (!Repo.coloniaPermitida(coloniaTxt)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selecciona una colonia válida de la lista oficial.')),
+      );
+      return;
+    }
+
+    if (latExtra == null || lngExtra == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selecciona este domicilio en el mapa.')),
       );
       return;
     }
@@ -1437,6 +1524,18 @@ class _DatosPageState extends State<DatosPage> with SingleTickerProviderStateMix
     return Scaffold(
       appBar: AppBar(
         title: const Text('Datos personales'),
+        actions: [
+          IconButton(
+            tooltip: 'Cerrar sesión',
+            onPressed: () {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginPage()),
+              );
+            },
+            icon: const Icon(Icons.logout),
+          ),
+        ],
         bottom: TabBar(
           controller: tab,
           tabs: const [
@@ -2681,21 +2780,338 @@ class _OperadorPageState extends State<OperadorPage> {
 // ADMINISTRADOR CONCEPTUAL / FUTURO
 // =======================================================
 
-class AdminConceptPage extends StatelessWidget {
-  const AdminConceptPage({super.key});
+class AdminPage extends StatefulWidget {
+  const AdminPage({super.key});
 
-  Widget item(IconData icon, String title, String subtitle, Color color) {
+  @override
+  State<AdminPage> createState() => _AdminPageState();
+}
+
+class _AdminPageState extends State<AdminPage> with SingleTickerProviderStateMixin {
+  late TabController tab;
+  List<AlertaOperativa> alertas = [];
+  List<Map<String, dynamic>> reportes = [];
+  List<Servicio> servicios = [];
+  List<RutaOficial> rutas = [];
+
+  @override
+  void initState() {
+    super.initState();
+    tab = TabController(length: 4, vsync: this);
+    cargar();
+  }
+
+  Future<void> cargar() async {
+    final a = await Repo.cargarAlertasOperativas();
+    final r = await Repo.cargarSugerencias();
+    final s = await Repo.cargarServicios();
+
+    if (!mounted) return;
+
+    setState(() {
+      alertas = a;
+      reportes = r;
+      servicios = s;
+      rutas = Repo.rutas();
+    });
+  }
+
+  int get alertasCriticas => alertas.where((a) => a.prioridad >= 3).length;
+  int get retrasos => alertas.where((a) => a.tipo == 'DELAY').length;
+  int get averias => alertas.where((a) => a.tipo == 'MECHANICAL_FAILURE').length;
+
+  double get promedioServicio {
+    if (servicios.isEmpty) return 0;
+    final total = servicios.fold<int>(0, (sum, s) => sum + s.estrellas);
+    return total / servicios.length;
+  }
+
+  Future<void> limpiarDemo() async {
+    await Repo.limpiarAlertasOperativas();
+    await cargar();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Alertas operativas limpiadas para la demo')),
+    );
+  }
+
+  Widget kpiCard({
+    required IconData icon,
+    required String title,
+    required String value,
+    required Color color,
+  }) {
+    return Expanded(
+      child: AppCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: color, size: 30),
+            const SizedBox(height: 8),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text(value, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget alertaTile(AlertaOperativa alerta) {
+    Color color = AppColors.green;
+    IconData icon = Icons.check_circle;
+
+    if (alerta.prioridad == 2) {
+      color = AppColors.orange;
+      icon = Icons.timer;
+    }
+
+    if (alerta.prioridad >= 3) {
+      color = AppColors.red;
+      icon = Icons.warning_amber;
+    }
+
     return Card(
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: ExpansionTile(
         leading: CircleAvatar(
           backgroundColor: color.withOpacity(0.12),
           child: Icon(icon, color: color),
         ),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
-        subtitle: Text(subtitle),
+        title: Text(alerta.titulo, style: const TextStyle(fontWeight: FontWeight.w900)),
+        subtitle: Text('${alerta.routeId} · Camión ${alerta.truckId} · ${alerta.fecha}'),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(alerta.mensaje, style: const TextStyle(fontSize: 16)),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Chip(label: Text('Tipo: ${alerta.tipo}')),
+              const SizedBox(width: 8),
+              Chip(label: Text('Prioridad ${alerta.prioridad}')),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Operador: ${alerta.operador}',
+              style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  Widget reporteTile(Map<String, dynamic> reporte) {
+    final texto = (reporte['texto'] ?? '').toString();
+    final fechaRaw = (reporte['fecha'] ?? '').toString();
+    final fecha = fechaRaw.length >= 16 ? fechaRaw.substring(0, 16).replaceAll('T', ' ') : fechaRaw;
+
+    IconData icon = Icons.feedback;
+    Color color = AppColors.green;
+
+    if (texto.toLowerCase().contains('camión no pasó') || texto.toLowerCase().contains('no pasó')) {
+      icon = Icons.cancel;
+      color = AppColors.red;
+    } else if (texto.toLowerCase().contains('retraso')) {
+      icon = Icons.timer;
+      color = AppColors.orange;
+    }
+
+    return Card(
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: color.withOpacity(0.12),
+          child: Icon(icon, color: color),
+        ),
+        title: Text(texto, style: const TextStyle(fontWeight: FontWeight.w800)),
+        subtitle: Text(fecha.isEmpty ? 'Reporte ciudadano' : fecha),
+        trailing: const Chip(label: Text('Nuevo')),
+      ),
+    );
+  }
+
+  Widget rutaTile(RutaOficial ruta) {
+    final inicio = ruta.positions.first.timestamp.substring(11, 16);
+    final fin = ruta.positions.last.timestamp.substring(11, 16);
+    final estadoColor = ruta.status == 'EN_RUTA' ? AppColors.green : Colors.grey;
+
+    return Card(
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: estadoColor.withOpacity(0.12),
+          child: Icon(Icons.local_shipping, color: estadoColor),
+        ),
+        title: Text('${ruta.routeId} · ${ruta.name}', style: const TextStyle(fontWeight: FontWeight.w900)),
+        subtitle: Text('Camión ${ruta.truckId} · $inicio - $fin · ${ruta.positions.length} puntos'),
+        trailing: Chip(
+          label: Text(ruta.status),
+          backgroundColor: estadoColor.withOpacity(0.12),
+        ),
+      ),
+    );
+  }
+
+  Widget operatorTile(String name, String ruta, String camion, String status, Color color) {
+    return Card(
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: color.withOpacity(0.12),
+          child: Icon(Icons.engineering, color: color),
+        ),
+        title: Text(name, style: const TextStyle(fontWeight: FontWeight.w900)),
+        subtitle: Text('$ruta · $camion'),
+        trailing: Chip(label: Text(status)),
+      ),
+    );
+  }
+
+  Widget resumenTab() {
+    return RefreshIndicator(
+      onRefresh: cargar,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          AppCard(
+            color: AppColors.softGreen,
+            child: Row(
+              children: [
+                const CircleAvatar(
+                  radius: 34,
+                  backgroundColor: AppColors.green,
+                  child: Icon(Icons.admin_panel_settings, color: Colors.white, size: 40),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      Text('Centro de control logístico', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
+                      SizedBox(height: 4),
+                      Text('Panel administrador para supervisar rutas, operadores, camiones y reportes.'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Row(
+            children: [
+              kpiCard(icon: Icons.alt_route, title: 'Rutas', value: '${rutas.length}', color: AppColors.green),
+              kpiCard(icon: Icons.warning_amber, title: 'Críticas', value: '$alertasCriticas', color: AppColors.red),
+            ],
+          ),
+          Row(
+            children: [
+              kpiCard(icon: Icons.feedback, title: 'Reportes', value: '${reportes.length}', color: AppColors.orange),
+              kpiCard(icon: Icons.star, title: 'Servicio', value: promedioServicio == 0 ? '—' : promedioServicio.toStringAsFixed(1), color: Colors.amber),
+            ],
+          ),
+          const SectionTitle('Operadores en turno'),
+          operatorTile('José Martínez', 'RUTA-01', 'Camión 101', 'En ruta', AppColors.green),
+          operatorTile('María López', 'RUTA-03', 'Camión 103', averias > 0 ? 'Requiere apoyo' : 'Disponible', averias > 0 ? AppColors.red : AppColors.orange),
+          operatorTile('Carlos Ramírez', 'RUTA-05', 'Camión 105', retrasos > 0 ? 'Retraso' : 'Programado', retrasos > 0 ? AppColors.orange : Colors.blueGrey),
+          const SectionTitle('Acciones administrativas'),
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 56,
+                  child: FilledButton.icon(
+                    onPressed: cargar,
+                    icon: const Icon(Icons.sync),
+                    label: const Text('Actualizar'),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: SizedBox(
+                  height: 56,
+                  child: OutlinedButton.icon(
+                    onPressed: limpiarDemo,
+                    icon: const Icon(Icons.cleaning_services),
+                    label: const Text('Limpiar demo'),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget alertasTab() {
+    return RefreshIndicator(
+      onRefresh: cargar,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const SectionTitle('Alertas operativas', subtitle: 'Eventos enviados desde la interfaz del operador.'),
+          if (alertas.isEmpty)
+            const AppCard(child: Text('Todavía no hay alertas. Entra como operador y reporta una avería o retraso.'))
+          else
+            ...alertas.map(alertaTile),
+        ],
+      ),
+    );
+  }
+
+  Widget reportesTab() {
+    return RefreshIndicator(
+      onRefresh: cargar,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const SectionTitle('Reportes ciudadanos', subtitle: 'Quejas y sugerencias enviadas desde el buzón.'),
+          if (reportes.isEmpty)
+            const AppCard(child: Text('Todavía no hay reportes ciudadanos.'))
+          else
+            ...reportes.map(reporteTile),
+          const SectionTitle('Calificaciones recientes'),
+          if (servicios.isEmpty)
+            const AppCard(child: Text('Todavía no hay calificaciones registradas.'))
+          else
+            ...servicios.map((s) => Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.star, color: Colors.amber),
+                    title: Text(s.domicilio, style: const TextStyle(fontWeight: FontWeight.w800)),
+                    subtitle: Text('${s.estrellas}/5 · ${s.fecha}'),
+                  ),
+                )),
+        ],
+      ),
+    );
+  }
+
+  Widget rutasTab() {
+    return RefreshIndicator(
+      onRefresh: cargar,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const SectionTitle('Rutas y flotilla', subtitle: 'Vista logística general. En producción aquí se reasignan camiones.'),
+          ...rutas.map(rutaTile),
+          const SizedBox(height: 16),
+          const Text(
+            'En el backend real este módulo tendría permisos RBAC para crear rutas, asignar operadores y despachar unidades de reemplazo.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.black54),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    tab.dispose();
+    super.dispose();
   }
 
   @override
@@ -2704,48 +3120,40 @@ class AdminConceptPage extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Administrador'),
         actions: [
+          IconButton(onPressed: cargar, icon: const Icon(Icons.refresh)),
           IconButton(
+            tooltip: 'Cerrar sesión',
             onPressed: () {
               Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginPage()));
             },
             icon: const Icon(Icons.logout),
           ),
         ],
+        bottom: TabBar(
+          controller: tab,
+          isScrollable: true,
+          tabs: const [
+            Tab(icon: Icon(Icons.dashboard), text: 'Resumen'),
+            Tab(icon: Icon(Icons.warning_amber), text: 'Alertas'),
+            Tab(icon: Icon(Icons.feedback), text: 'Reportes'),
+            Tab(icon: Icon(Icons.alt_route), text: 'Rutas'),
+          ],
+        ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: TabBarView(
+        controller: tab,
         children: [
-          AppCard(
-            color: AppColors.softGreen,
-            child: Column(
-              children: const [
-                Icon(Icons.admin_panel_settings, size: 76, color: AppColors.green),
-                SizedBox(height: 12),
-                Text(
-                  'Módulo logístico propuesto',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  'No se desarrolla en este MVP por alcance del hackathon, pero queda contemplado dentro de la arquitectura por roles.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 17, height: 1.35),
-                ),
-              ],
-            ),
-          ),
-          const SectionTitle('Funciones futuras'),
-          item(Icons.alt_route, 'Asignación de rutas', 'Crear, editar y asignar rutas por zona de cobertura.', AppColors.green),
-          item(Icons.local_shipping, 'Gestión de camiones', 'Asignar unidades, revisar disponibilidad y controlar mantenimientos.', Colors.indigo),
-          item(Icons.engineering, 'Asignación de operadores', 'Vincular choferes con camiones, turnos y rutas.', AppColors.orange),
-          item(Icons.analytics, 'Indicadores logísticos', 'Medir retrasos, cumplimiento, incidencias y calificaciones.', Colors.blueGrey),
-          item(Icons.security, 'Control RBAC', 'Separar permisos entre ciudadano, operador y administrador.', AppColors.red),
+          resumenTab(),
+          alertasTab(),
+          reportesTab(),
+          rutasTab(),
         ],
       ),
     );
   }
 }
+
+
 
 
 // =======================================================
