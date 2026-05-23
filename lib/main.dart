@@ -306,6 +306,20 @@ class Domicilio {
   }
 }
 
+
+
+class UbicacionMapa {
+  final LatLng punto;
+  final String direccion;
+  final String colonia;
+
+  UbicacionMapa({
+    required this.punto,
+    required this.direccion,
+    required this.colonia,
+  });
+}
+
 class Servicio {
   final String domicilio;
   final int estrellas;
@@ -422,6 +436,60 @@ class Repo {
         .replaceAll('ó', 'o')
         .replaceAll('ú', 'u')
         .replaceAll('ü', 'u');
+  }
+
+  static LatLng centroColonia(String colonia) {
+    final key = normalizar(colonia);
+
+    final centros = <String, LatLng>{
+      'zona centro': LatLng(20.5210, -100.8210),
+      'las arboledas': LatLng(20.5215, -100.8178),
+      'trojes': LatLng(20.5440, -100.8040),
+      'san juanico': LatLng(20.5315, -100.8355),
+      'los olivos': LatLng(20.5320, -100.7850),
+      'rancho seco': LatLng(20.4995, -100.8210),
+      'las insurgentes': LatLng(20.5340, -100.7940),
+    };
+
+    return centros[key] ?? LatLng(20.5210, -100.8210);
+  }
+
+  static String coloniaMasCercana(LatLng punto) {
+    final distance = Distance();
+
+    String mejorColonia = colonias().first.colonia;
+    double menorDistancia = double.infinity;
+
+    for (final c in colonias()) {
+      final centro = centroColonia(c.colonia);
+      final metros = distance.as(LengthUnit.Meter, punto, centro);
+
+      if (metros < menorDistancia) {
+        menorDistancia = metros;
+        mejorColonia = c.colonia;
+      }
+    }
+
+    return mejorColonia;
+  }
+
+  static String coloniaOficialDesdeTexto(String texto, LatLng punto) {
+    final normal = normalizar(texto);
+
+    for (final c in colonias()) {
+      final col = normalizar(c.colonia);
+      if (normal.contains(col)) {
+        return c.colonia;
+      }
+    }
+
+    return coloniaMasCercana(punto);
+  }
+
+
+  static String coordenadasTexto(double? lat, double? lng) {
+    if (lat == null || lng == null) return 'Ubicación no seleccionada';
+    return '${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}';
   }
 
   static ColoniaZona? coloniaDe(Domicilio? domicilio) {
@@ -776,6 +844,246 @@ class ApiService {
 
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
+
+  static String _errorMessage(http.Response response, String fallback) {
+    try {
+      final data = jsonDecode(response.body);
+      return data['detail']?.toString() ?? fallback;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  static String fechaDesdeBackend(dynamic value) {
+    final raw = value?.toString() ?? '';
+    if (raw.length >= 16) {
+      return raw.substring(0, 16).replaceAll('T', ' ');
+    }
+    return raw;
+  }
+
+  static AlertaOperativa alertaFromBackend(Map<String, dynamic> json) {
+    return AlertaOperativa(
+      id: json['id']?.toString() ?? '',
+      tipo: json['type']?.toString() ?? 'INFO',
+      titulo: json['title']?.toString() ?? 'Alerta operativa',
+      mensaje: json['message']?.toString() ?? '',
+      routeId: json['route_id']?.toString() ?? '',
+      rutaNombre: json['route_name']?.toString() ?? '',
+      truckId: (json['truck_id'] as num?)?.toInt() ?? 0,
+      operador: json['operator_id'] == null ? 'Sistema' : 'Operador ${json['operator_id']}',
+      estado: json['status']?.toString() ?? 'NUEVA',
+      fecha: fechaDesdeBackend(json['created_at']),
+      prioridad: (json['priority'] as num?)?.toInt() ?? 1,
+    );
+  }
+
+  static Future<void> ensureCitizenDemoDomicilio() async {
+    if (ApiSession.role != 'ciudadano') return;
+
+    final listResponse = await http.get(
+      Uri.parse('$apiBase/citizen/domicilios'),
+      headers: authHeaders(),
+    );
+
+    if (listResponse.statusCode == 200) {
+      final list = jsonDecode(listResponse.body) as List;
+      if (list.isNotEmpty) return;
+    }
+
+    final createResponse = await http.post(
+      Uri.parse('$apiBase/citizen/domicilios'),
+      headers: authHeaders(),
+      body: jsonEncode({
+        'tipo': 'Casa principal',
+        'direccion': 'Calle Luna 123',
+        'colonia': 'Zona Centro',
+        'lat': 20.5210,
+        'lng': -100.8210,
+      }),
+    );
+
+    if (createResponse.statusCode < 200 || createResponse.statusCode >= 300) {
+      throw Exception(_errorMessage(createResponse, 'No se pudo crear domicilio demo'));
+    }
+  }
+
+  static Future<List<AlertaOperativa>> citizenAlerts() async {
+    await ensureCitizenDemoDomicilio();
+
+    final response = await http.get(
+      Uri.parse('$apiBase/citizen/alerts'),
+      headers: authHeaders(),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception(_errorMessage(response, 'No se pudieron cargar alertas ciudadanas'));
+    }
+
+    final list = jsonDecode(response.body) as List;
+    return list
+        .map((e) => alertaFromBackend(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  static Future<List<AlertaOperativa>> adminAlerts() async {
+    final response = await http.get(
+      Uri.parse('$apiBase/admin/alerts'),
+      headers: authHeaders(),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception(_errorMessage(response, 'No se pudieron cargar alertas admin'));
+    }
+
+    final list = jsonDecode(response.body) as List;
+    return list
+        .map((e) => alertaFromBackend(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  static Future<List<Map<String, dynamic>>> adminReports() async {
+    final response = await http.get(
+      Uri.parse('$apiBase/admin/reports'),
+      headers: authHeaders(),
+    );
+
+    if (response.statusCode != 200) return [];
+
+    final list = jsonDecode(response.body) as List;
+    return list.map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  static Future<List<Map<String, dynamic>>> operatorRoutes() async {
+    final response = await http.get(
+      Uri.parse('$apiBase/operator/routes'),
+      headers: authHeaders(),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception(_errorMessage(response, 'No se pudieron cargar rutas del operador'));
+    }
+
+    final list = jsonDecode(response.body) as List;
+    return list.map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  static Future<List<AlertaOperativa>> operatorAlerts() async {
+    final response = await http.get(
+      Uri.parse('$apiBase/operator/alerts'),
+      headers: authHeaders(),
+    );
+
+    if (response.statusCode != 200) return [];
+
+    final list = jsonDecode(response.body) as List;
+    return list
+        .map((e) => alertaFromBackend(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  static Future<void> operatorAction({
+    required String routeId,
+    required String action,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$apiBase/operator/routes/$routeId/$action'),
+      headers: authHeaders(),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(_errorMessage(response, 'No se pudo enviar evento operativo'));
+    }
+  }
+}
+
+
+
+class GeoService {
+  static Future<UbicacionMapa> reverseGeocode({
+    required LatLng punto,
+    required String coloniaFallback,
+  }) async {
+    final coloniaCercana = Repo.coloniaMasCercana(punto);
+
+    try {
+      final uri = Uri.https(
+        'nominatim.openstreetmap.org',
+        '/reverse',
+        {
+          'format': 'jsonv2',
+          'lat': punto.latitude.toString(),
+          'lon': punto.longitude.toString(),
+          'zoom': '18',
+          'addressdetails': '1',
+          'accept-language': 'es',
+        },
+      );
+
+      final response = await http.get(
+        uri,
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'RecolectorInteligenteHackathon/1.0',
+        },
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode != 200) {
+        throw Exception('No se pudo geocodificar');
+      }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final address = Map<String, dynamic>.from(data['address'] ?? {});
+
+      final calle = (
+        address['road'] ??
+        address['pedestrian'] ??
+        address['footway'] ??
+        address['residential'] ??
+        address['path'] ??
+        address['cycleway'] ??
+        ''
+      ).toString().trim();
+
+      final numero = (address['house_number'] ?? '').toString().trim();
+
+      final localidadTexto = [
+        address['suburb'],
+        address['neighbourhood'],
+        address['quarter'],
+        address['city_district'],
+        address['hamlet'],
+        address['village'],
+        address['town'],
+        address['city'],
+        data['display_name'],
+      ].where((e) => e != null && e.toString().trim().isNotEmpty).join(' ');
+
+      final colonia = Repo.coloniaOficialDesdeTexto(localidadTexto, punto);
+
+      String direccion = '';
+
+      if (calle.isNotEmpty && numero.isNotEmpty) {
+        direccion = '$calle $numero';
+      } else if (calle.isNotEmpty) {
+        direccion = '$calle, cerca de ${punto.latitude.toStringAsFixed(5)}, ${punto.longitude.toStringAsFixed(5)}';
+      } else {
+        direccion = 'Ubicación seleccionada ${punto.latitude.toStringAsFixed(5)}, ${punto.longitude.toStringAsFixed(5)}';
+      }
+
+      return UbicacionMapa(
+        punto: punto,
+        direccion: direccion,
+        colonia: colonia,
+      );
+    } catch (_) {
+      return UbicacionMapa(
+        punto: punto,
+        direccion: 'Ubicación seleccionada ${punto.latitude.toStringAsFixed(5)}, ${punto.longitude.toStringAsFixed(5)}',
+        colonia: coloniaFallback.trim().isNotEmpty ? coloniaFallback.trim() : coloniaCercana,
+      );
+    }
+  }
 }
 
 // =======================================================
@@ -1006,25 +1314,56 @@ class _HomePageState extends State<HomePage> {
   List<Domicilio> domicilios = [];
   List<Servicio> servicios = [];
   List<AlertaOperativa> alertas = [];
+  Timer? alertTimer;
+  String? ultimaAlertaVista;
 
   @override
   void initState() {
     super.initState();
     cargar();
+    alertTimer = Timer.periodic(const Duration(seconds: 5), (_) => cargar(silencioso: true));
   }
 
-  Future<void> cargar() async {
+  Future<void> cargar({bool silencioso = false}) async {
     final d = await Repo.cargarDomicilios();
     final s = await Repo.cargarServicios();
-    final a = await Repo.cargarAlertasOperativas();
+
+    List<AlertaOperativa> a = [];
+    try {
+      a = await ApiService.citizenAlerts();
+    } catch (_) {
+      a = await Repo.cargarAlertasOperativas();
+    }
 
     if (!mounted) return;
+
+    final nuevaAlerta = a.isNotEmpty && a.first.id != ultimaAlertaVista;
 
     setState(() {
       domicilios = d;
       servicios = s;
       alertas = a;
     });
+
+    if (nuevaAlerta && silencioso) {
+      ultimaAlertaVista = a.first.id;
+      final alerta = a.first;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${alerta.titulo}\n${alerta.mensaje}'),
+          duration: const Duration(seconds: 5),
+          backgroundColor: alerta.prioridad >= 3 ? AppColors.red : AppColors.orange,
+        ),
+      );
+    } else if (a.isNotEmpty) {
+      ultimaAlertaVista = a.first.id;
+    }
+  }
+
+  @override
+  void dispose() {
+    alertTimer?.cancel();
+    super.dispose();
   }
 
   Widget menuCard({
@@ -1219,11 +1558,13 @@ class _HomePageState extends State<HomePage> {
 class MapPickerPage extends StatefulWidget {
   final double? initialLat;
   final double? initialLng;
+  final String? initialColonia;
 
   const MapPickerPage({
     super.key,
     this.initialLat,
     this.initialLng,
+    this.initialColonia,
   });
 
   @override
@@ -1231,12 +1572,119 @@ class MapPickerPage extends StatefulWidget {
 }
 
 class _MapPickerPageState extends State<MapPickerPage> {
+  final MapController mapController = MapController();
+
   late LatLng selected;
+  late LatLng coloniaCentro;
+
+  double zoom = 15;
+  bool buscandoDireccion = false;
+
+  String direccionDetectada = 'Selecciona un punto en el mapa';
+  String coloniaDetectada = 'Zona Centro';
+
+  Timer? geoTimer;
 
   @override
   void initState() {
     super.initState();
-    selected = LatLng(widget.initialLat ?? 20.5210, widget.initialLng ?? -100.8210);
+
+    coloniaDetectada = widget.initialColonia?.trim().isNotEmpty == true
+        ? widget.initialColonia!.trim()
+        : 'Zona Centro';
+
+    coloniaCentro = Repo.centroColonia(coloniaDetectada);
+
+    selected = LatLng(
+      widget.initialLat ?? coloniaCentro.latitude,
+      widget.initialLng ?? coloniaCentro.longitude,
+    );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      actualizarDireccionDesdeMapa(selected);
+    });
+  }
+
+  void moverAColonia() {
+    final centro = Repo.centroColonia(coloniaDetectada);
+
+    setState(() {
+      selected = centro;
+      coloniaCentro = centro;
+      zoom = 15;
+    });
+
+    mapController.move(centro, zoom);
+    actualizarDireccionDesdeMapa(centro);
+  }
+
+  void ajustarZoom(double delta) {
+    final nuevoZoom = (zoom + delta).clamp(12.0, 18.0);
+
+    setState(() {
+      zoom = nuevoZoom;
+    });
+
+    mapController.move(selected, nuevoZoom);
+  }
+
+  void seleccionarPunto(LatLng punto, {bool moverCamara = false}) {
+    setState(() {
+      selected = punto;
+    });
+
+    if (moverCamara) {
+      mapController.move(punto, zoom);
+    }
+
+    actualizarDireccionDesdeMapa(punto);
+  }
+
+  void actualizarDireccionDesdeMapa(LatLng punto) {
+    geoTimer?.cancel();
+
+    setState(() {
+      buscandoDireccion = true;
+    });
+
+    geoTimer = Timer(const Duration(milliseconds: 650), () async {
+      final resultado = await GeoService.reverseGeocode(
+        punto: punto,
+        coloniaFallback: coloniaDetectada,
+      );
+
+      if (!mounted) return;
+
+      final sigueSiendoElMismoPunto =
+          (selected.latitude - punto.latitude).abs() < 0.00001 &&
+          (selected.longitude - punto.longitude).abs() < 0.00001;
+
+      if (!sigueSiendoElMismoPunto) return;
+
+      setState(() {
+        direccionDetectada = resultado.direccion;
+        coloniaDetectada = resultado.colonia;
+        coloniaCentro = Repo.centroColonia(resultado.colonia);
+        buscandoDireccion = false;
+      });
+    });
+  }
+
+  void confirmarUbicacion() {
+    Navigator.pop(
+      context,
+      UbicacionMapa(
+        punto: selected,
+        direccion: direccionDetectada,
+        colonia: coloniaDetectada,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    geoTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -1244,15 +1692,35 @@ class _MapPickerPageState extends State<MapPickerPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Seleccionar domicilio'),
+        actions: [
+          IconButton(
+            tooltip: 'Centrar en colonia',
+            onPressed: moverAColonia,
+            icon: const Icon(Icons.my_location),
+          ),
+        ],
       ),
       body: Stack(
         children: [
           FlutterMap(
+            mapController: mapController,
             options: MapOptions(
               initialCenter: selected,
-              initialZoom: 14,
+              initialZoom: zoom,
+              minZoom: 12,
+              maxZoom: 18,
               onTap: (tapPosition, point) {
-                setState(() => selected = point);
+                seleccionarPunto(point, moverCamara: true);
+              },
+              onPositionChanged: (camera, hasGesture) {
+                if (hasGesture) {
+                  setState(() {
+                    selected = camera.center;
+                    zoom = camera.zoom;
+                  });
+
+                  actualizarDireccionDesdeMapa(camera.center);
+                }
               },
             ),
             children: [
@@ -1263,19 +1731,83 @@ class _MapPickerPageState extends State<MapPickerPage> {
               MarkerLayer(
                 markers: [
                   Marker(
+                    point: coloniaCentro,
+                    width: 46,
+                    height: 46,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.green.withOpacity(0.18),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: AppColors.green, width: 2),
+                      ),
+                      child: const Icon(
+                        Icons.location_city,
+                        color: AppColors.green,
+                      ),
+                    ),
+                  ),
+                  Marker(
                     point: selected,
                     width: 80,
                     height: 80,
                     child: const Icon(
                       Icons.location_pin,
                       color: AppColors.red,
-                      size: 48,
+                      size: 54,
                     ),
                   ),
                 ],
               ),
             ],
           ),
+
+          Positioned(
+            left: 16,
+            right: 16,
+            top: 14,
+            child: AppCard(
+              color: Colors.white.withOpacity(0.94),
+              child: Row(
+                children: [
+                  Icon(
+                    buscandoDireccion ? Icons.sync : Icons.touch_app,
+                    color: AppColors.green,
+                    size: 32,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      buscandoDireccion
+                          ? 'Buscando dirección y localidad...'
+                          : 'Mueve el mapa o toca un punto. La dirección y colonia se actualizan automáticamente.',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          Positioned(
+            right: 16,
+            top: 112,
+            child: Column(
+              children: [
+                FloatingActionButton.small(
+                  heroTag: 'zoomIn',
+                  onPressed: () => ajustarZoom(1),
+                  child: const Icon(Icons.add),
+                ),
+                const SizedBox(height: 8),
+                FloatingActionButton.small(
+                  heroTag: 'zoomOut',
+                  onPressed: () => ajustarZoom(-1),
+                  child: const Icon(Icons.remove),
+                ),
+              ],
+            ),
+          ),
+
           Positioned(
             left: 16,
             right: 16,
@@ -1283,28 +1815,91 @@ class _MapPickerPageState extends State<MapPickerPage> {
             child: AppCard(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Toca el mapa para colocar tu domicilio',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Lat: ${selected.latitude.toStringAsFixed(6)} · Lng: ${selected.longitude.toStringAsFixed(6)}',
-                    textAlign: TextAlign.center,
+                  const Center(
+                    child: Text(
+                      'Confirmar ubicación del domicilio',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 12),
-                  SizedBox(
-                    height: 52,
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: () {
-                        Navigator.pop(context, selected);
-                      },
-                      icon: const Icon(Icons.check),
-                      label: const Text('Usar esta ubicación'),
+
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.home, color: AppColors.green),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          direccionDetectada,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  Row(
+                    children: [
+                      const Icon(Icons.location_city, color: AppColors.green),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Localidad/colonia: $coloniaDetectada',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  Text(
+                    'Lat: ${selected.latitude.toStringAsFixed(6)} · Lng: ${selected.longitude.toStringAsFixed(6)}',
+                    style: TextStyle(
+                      color: Colors.grey.shade700,
+                      fontWeight: FontWeight.w700,
                     ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SizedBox(
+                          height: 50,
+                          child: OutlinedButton.icon(
+                            onPressed: moverAColonia,
+                            icon: const Icon(Icons.center_focus_strong),
+                            label: const Text('Centrar'),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: SizedBox(
+                          height: 50,
+                          child: FilledButton.icon(
+                            onPressed: buscandoDireccion ? null : confirmarUbicacion,
+                            icon: const Icon(Icons.check),
+                            label: const Text('Usar ubicación'),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -1315,6 +1910,7 @@ class _MapPickerPageState extends State<MapPickerPage> {
     );
   }
 }
+
 
 // =======================================================
 // DATOS
@@ -1385,12 +1981,13 @@ class _DatosPageState extends State<DatosPage> with SingleTickerProviderStateMix
   }
 
   Future<void> abrirMapaPrincipal() async {
-    final result = await Navigator.push<LatLng>(
+    final result = await Navigator.push<UbicacionMapa>(
       context,
       MaterialPageRoute(
         builder: (_) => MapPickerPage(
           initialLat: latPrincipal,
           initialLng: lngPrincipal,
+          initialColonia: coloniaPrincipal.text.trim(),
         ),
       ),
     );
@@ -1398,18 +1995,22 @@ class _DatosPageState extends State<DatosPage> with SingleTickerProviderStateMix
     if (result == null) return;
 
     setState(() {
-      latPrincipal = result.latitude;
-      lngPrincipal = result.longitude;
+      latPrincipal = result.punto.latitude;
+      lngPrincipal = result.punto.longitude;
+      direccionPrincipal.text = result.direccion;
+      coloniaPrincipal.text = result.colonia;
+      resultado = '';
     });
   }
 
   Future<void> abrirMapaExtra() async {
-    final result = await Navigator.push<LatLng>(
+    final result = await Navigator.push<UbicacionMapa>(
       context,
       MaterialPageRoute(
         builder: (_) => MapPickerPage(
           initialLat: latExtra,
           initialLng: lngExtra,
+          initialColonia: coloniaExtra.text.trim(),
         ),
       ),
     );
@@ -1417,8 +2018,35 @@ class _DatosPageState extends State<DatosPage> with SingleTickerProviderStateMix
     if (result == null) return;
 
     setState(() {
-      latExtra = result.latitude;
-      lngExtra = result.longitude;
+      latExtra = result.punto.latitude;
+      lngExtra = result.punto.longitude;
+      direccionExtra.text = result.direccion;
+      coloniaExtra.text = result.colonia;
+    });
+  }
+
+  void actualizarMapaPrincipalPorColonia(String? value) {
+    final colonia = value ?? '';
+    coloniaPrincipal.text = colonia;
+
+    final centro = Repo.centroColonia(colonia);
+
+    setState(() {
+      latPrincipal = centro.latitude;
+      lngPrincipal = centro.longitude;
+      resultado = '';
+    });
+  }
+
+  void actualizarMapaExtraPorColonia(String? value) {
+    final colonia = value ?? '';
+    coloniaExtra.text = colonia;
+
+    final centro = Repo.centroColonia(colonia);
+
+    setState(() {
+      latExtra = centro.latitude;
+      lngExtra = centro.longitude;
     });
   }
 
@@ -1631,34 +2259,200 @@ class _DatosPageState extends State<DatosPage> with SingleTickerProviderStateMix
     );
   }
 
+  Widget asignacionZonaCard({
+    required String colonia,
+    required double? lat,
+    required double? lng,
+  }) {
+    final col = colonia.trim().isEmpty ? 'Zona Centro' : colonia.trim();
+    final domicilioDemo = Domicilio(
+      tipo: 'Vista previa',
+      direccion: 'Domicilio temporal 123',
+      colonia: col,
+      lat: lat,
+      lng: lng,
+    );
+    final ruta = Repo.rutaDe(domicilioDemo);
+    final horario = Repo.horarioDe(domicilioDemo);
+    final coloniaValidada = Repo.coloniaDe(domicilioDemo);
+
+    return AppCard(
+      color: Colors.white,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const CircleAvatar(
+                backgroundColor: AppColors.softGreen,
+                child: Icon(Icons.check_circle, color: AppColors.green),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Datos actualizados automáticamente',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                    ),
+                    Text(
+                      'Al cambiar colonia se actualiza ruta, horario y mapa.',
+                      style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              Chip(
+                avatar: const Icon(Icons.location_city, size: 18),
+                label: Text(coloniaValidada?.colonia ?? col),
+              ),
+              Chip(
+                avatar: const Icon(Icons.alt_route, size: 18),
+                label: Text(ruta.routeId),
+              ),
+              Chip(
+                avatar: const Icon(Icons.local_shipping, size: 18),
+                label: Text('Camión ${ruta.truckId}'),
+              ),
+              Chip(
+                avatar: const Icon(Icons.schedule, size: 18),
+                label: Text(horario),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Icon(Icons.map, color: AppColors.green),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  lat == null || lng == null
+                      ? 'El mapa se precargó al centro de $col. Abre el mapa para ajustar el pin exacto.'
+                      : 'Ubicación seleccionada: ${Repo.coordenadasTexto(lat, lng)}',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget selectorMapa({
     required VoidCallback onPressed,
     required double? lat,
     required double? lng,
+    required String colonia,
   }) {
+    final tieneUbicacion = lat != null && lng != null;
+    final punto = LatLng(lat ?? Repo.centroColonia(colonia).latitude, lng ?? Repo.centroColonia(colonia).longitude);
+    final domicilioDemo = Domicilio(tipo: 'Vista previa', direccion: 'Domicilio seleccionado', colonia: colonia);
+    final ruta = Repo.rutaDe(domicilioDemo);
+    final horario = Repo.horarioDe(domicilioDemo);
+
     return AppCard(
       color: AppColors.softGreen,
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Ubicación en mapa',
-            style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
+          Row(
+            children: [
+              const Icon(Icons.map, color: AppColors.green, size: 32),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Ubicación en mapa',
+                      style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
+                    ),
+                    Text(
+                      tieneUbicacion
+                          ? 'Coordenadas: ${Repo.coordenadasTexto(lat, lng)}'
+                          : 'Selecciona colonia para precargar el mapa.',
+                      style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            lat == null || lng == null
-                ? 'Aún no has seleccionado ubicación.'
-                : 'Lat: ${lat.toStringAsFixed(6)} · Lng: ${lng.toStringAsFixed(6)}',
-            textAlign: TextAlign.center,
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: SizedBox(
+              height: 180,
+              child: FlutterMap(
+                key: ValueKey('preview-$colonia-${lat ?? 0}-${lng ?? 0}'),
+                options: MapOptions(
+                  initialCenter: punto,
+                  initialZoom: 15,
+                  interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
+                ),
+                children: [
+                  TileLayer(
+                    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.example.recolector_app',
+                  ),
+                  MarkerLayer(
+                    markers: [
+                      Marker(
+                        point: punto,
+                        width: 70,
+                        height: 70,
+                        child: Icon(
+                          tieneUbicacion ? Icons.location_pin : Icons.location_searching,
+                          color: tieneUbicacion ? AppColors.red : AppColors.orange,
+                          size: 48,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.green.withOpacity(0.20)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.alt_route, color: AppColors.green),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '$colonia · ${ruta.routeId} · $horario',
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 10),
           SizedBox(
             height: 52,
             width: double.infinity,
-            child: OutlinedButton.icon(
+            child: FilledButton.icon(
               onPressed: onPressed,
-              icon: const Icon(Icons.map),
-              label: const Text('Abrir mapa'),
+              icon: const Icon(Icons.edit_location_alt),
+              label: Text(tieneUbicacion ? 'Ajustar ubicación' : 'Abrir mapa y confirmar'),
             ),
           ),
         ],
@@ -1733,15 +2527,20 @@ class _DatosPageState extends State<DatosPage> with SingleTickerProviderStateMix
                     child: Text(c.colonia),
                   );
                 }).toList(),
-                onChanged: (value) {
-                  coloniaPrincipal.text = value ?? '';
-                },
+                onChanged: actualizarMapaPrincipalPorColonia,
+              ),
+              const SizedBox(height: 10),
+              asignacionZonaCard(
+                colonia: coloniaPrincipal.text.trim().isEmpty ? 'Zona Centro' : coloniaPrincipal.text.trim(),
+                lat: latPrincipal,
+                lng: lngPrincipal,
               ),
               const SizedBox(height: 14),
               selectorMapa(
                 onPressed: abrirMapaPrincipal,
                 lat: latPrincipal,
                 lng: lngPrincipal,
+                colonia: coloniaPrincipal.text.trim().isEmpty ? 'Zona Centro' : coloniaPrincipal.text.trim(),
               ),
               const SizedBox(height: 10),
               SizedBox(
@@ -1804,15 +2603,20 @@ class _DatosPageState extends State<DatosPage> with SingleTickerProviderStateMix
                     child: Text(c.colonia),
                   );
                 }).toList(),
-                onChanged: (value) {
-                  coloniaExtra.text = value ?? '';
-                },
+                onChanged: actualizarMapaExtraPorColonia,
+              ),
+              const SizedBox(height: 10),
+              asignacionZonaCard(
+                colonia: coloniaExtra.text.trim().isEmpty ? 'Zona Centro' : coloniaExtra.text.trim(),
+                lat: latExtra,
+                lng: lngExtra,
               ),
               const SizedBox(height: 14),
               selectorMapa(
                 onPressed: abrirMapaExtra,
                 lat: latExtra,
                 lng: lngExtra,
+                colonia: coloniaExtra.text.trim().isEmpty ? 'Zona Centro' : coloniaExtra.text.trim(),
               ),
               const SizedBox(height: 10),
               SizedBox(
@@ -2404,7 +3208,12 @@ class _OperadorPageState extends State<OperadorPage> {
   }
 
   Future<void> cargarHistorial() async {
-    final lista = await Repo.cargarAlertasOperativas();
+    List<AlertaOperativa> lista = [];
+    try {
+      lista = await ApiService.operatorAlerts();
+    } catch (_) {
+      lista = await Repo.cargarAlertasOperativas();
+    }
     if (!mounted) return;
     setState(() => historial = lista);
   }
@@ -2435,8 +3244,29 @@ class _OperadorPageState extends State<OperadorPage> {
     required int prioridad,
     required String nuevoEstado,
   }) async {
-    final now = DateTime.now();
+    String action = 'incident';
+    if (tipo == 'ROUTE_START') action = 'start';
+    if (tipo == 'TRUCK_PROXIMITY') action = 'advance/4';
+    if (tipo == 'DELAY') action = 'delay';
+    if (tipo == 'MECHANICAL_FAILURE') action = 'breakdown';
+    if (tipo == 'INCIDENT') action = 'incident';
+    if (tipo == 'ROUTE_COMPLETED') action = 'complete';
 
+    try {
+      await ApiService.operatorAction(routeId: rutaSeleccionada.routeId, action: action);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("No se pudo enviar al backend: ${e.toString().replaceFirst('Exception: ', '')}"),
+          backgroundColor: AppColors.red,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+      return;
+    }
+
+    final now = DateTime.now();
     final alerta = AlertaOperativa(
       id: now.microsecondsSinceEpoch.toString(),
       tipo: tipo,
@@ -2463,7 +3293,7 @@ class _OperadorPageState extends State<OperadorPage> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('$titulo\n$mensaje'),
+        content: Text('$titulo\nEnviado al backend y visible para ciudadano/admin.'),
         duration: const Duration(seconds: 4),
       ),
     );
@@ -2967,8 +3797,28 @@ class _AdminPageState extends State<AdminPage> with SingleTickerProviderStateMix
   }
 
   Future<void> cargar() async {
-    final a = await Repo.cargarAlertasOperativas();
-    final r = await Repo.cargarSugerencias();
+    List<AlertaOperativa> a = [];
+    List<Map<String, dynamic>> r = [];
+
+    try {
+      a = await ApiService.adminAlerts();
+    } catch (_) {
+      a = await Repo.cargarAlertasOperativas();
+    }
+
+    try {
+      final backendReports = await ApiService.adminReports();
+      r = backendReports.map((item) {
+        return {
+          'texto': '[${item['type'] ?? 'Reporte'}] ${item['comment'] ?? ''}',
+          'fecha': item['created_at'] ?? '',
+          'estado': item['status'] ?? 'NUEVO',
+        };
+      }).toList();
+    } catch (_) {
+      r = await Repo.cargarSugerencias();
+    }
+
     final s = await Repo.cargarServicios();
 
     if (!mounted) return;
