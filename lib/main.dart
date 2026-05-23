@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:convert';
 
@@ -10,7 +9,7 @@ void main() {
   runApp(const RecolectorApp());
 }
 
-/* ======================= JSON LOCAL DE RUTAS ======================= */
+// ======================= JSON LOCAL DE RUTAS =======================
 
 const String rutasJson = '''
 [
@@ -72,7 +71,7 @@ const String rutasJson = '''
 ]
 ''';
 
-/* ======================= MODELOS ======================= */
+// ======================= MODELOS =======================
 
 class Ruta {
   final String id;
@@ -99,15 +98,15 @@ class Ruta {
 
   factory Ruta.fromJson(Map<String, dynamic> json) {
     return Ruta(
-      id: json['id'],
-      zona: json['zona'],
-      keywords: List<String>.from(json['keywords']),
-      dias: List<String>.from(json['dias']),
-      inicio: json['inicio'],
-      fin: json['fin'],
-      proxima: json['proxima'],
-      eta: json['eta'],
-      consejo: json['consejo'],
+      id: json['id'] ?? '',
+      zona: json['zona'] ?? '',
+      keywords: List<String>.from(json['keywords'] ?? []),
+      dias: List<String>.from(json['dias'] ?? []),
+      inicio: json['inicio'] ?? '',
+      fin: json['fin'] ?? '',
+      proxima: json['proxima'] ?? '',
+      eta: json['eta'] ?? '',
+      consejo: json['consejo'] ?? '',
     );
   }
 
@@ -178,7 +177,7 @@ class Servicio {
   }
 }
 
-/* ======================= PERSISTENCIA Y RUTAS ======================= */
+// ======================= REPOSITORIO =======================
 
 class Repo {
   static List<Ruta> rutas() {
@@ -240,7 +239,6 @@ class Repo {
       return list.map((e) => Domicilio.fromJson(Map<String, dynamic>.from(e))).toList();
     }
 
-    // Compatibilidad con versiones anteriores del proyecto.
     final principal = prefs.getString('domicilio') ?? '';
     final colonia = prefs.getString('colonia') ?? '';
     final negocio = prefs.getString('negocio') ?? '';
@@ -305,7 +303,7 @@ class Repo {
   }
 }
 
-/* ======================= ESTILO ======================= */
+// ======================= ESTILO =======================
 
 class AppColors {
   static const green = Color(0xFF2E7D32);
@@ -392,7 +390,7 @@ class AppCard extends StatelessWidget {
   }
 }
 
-/* ======================= LOGIN ======================= */
+// ======================= LOGIN =======================
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -504,7 +502,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
-/* ======================= HOME ======================= */
+// ======================= HOME =======================
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -516,7 +514,6 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   List<Domicilio> domicilios = [];
   List<Servicio> servicios = [];
-  final sugerencia = TextEditingController();
 
   @override
   void initState() {
@@ -534,26 +531,6 @@ class _HomePageState extends State<HomePage> {
       domicilios = d;
       servicios = s;
     });
-  }
-
-  Future<void> enviarSugerencia() async {
-    final texto = sugerencia.text.trim();
-
-    if (texto.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Escribe una queja o sugerencia')),
-      );
-      return;
-    }
-
-    await Repo.guardarSugerencia(texto);
-    sugerencia.clear();
-
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Sugerencia enviada correctamente')),
-    );
   }
 
   Widget menuCard({
@@ -576,12 +553,6 @@ class _HomePageState extends State<HomePage> {
         onTap: onTap,
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    sugerencia.dispose();
-    super.dispose();
   }
 
   @override
@@ -687,35 +658,13 @@ class _HomePageState extends State<HomePage> {
                 Navigator.push(context, MaterialPageRoute(builder: (_) => const GuiaPage()));
               },
             ),
-            const SectionTitle(
-              'Buzón de sugerencias',
-              subtitle: 'Widget principal para quejas y comentarios.',
-            ),
-            AppCard(
-              child: Column(
-                children: [
-                  TextField(
-                    controller: sugerencia,
-                    minLines: 3,
-                    maxLines: 5,
-                    decoration: const InputDecoration(
-                      labelText: 'Queja o sugerencia',
-                      hintText: 'Ejemplo: el camión pasó fuera del horario indicado',
-                      prefixIcon: Icon(Icons.feedback),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    height: 52,
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: enviarSugerencia,
-                      icon: const Icon(Icons.send),
-                      label: const Text('Enviar sugerencia', style: TextStyle(fontSize: 17)),
-                    ),
-                  ),
-                ],
-              ),
+            menuCard(
+              icon: Icons.feedback,
+              title: 'Buzón de sugerencias',
+              subtitle: 'Envía quejas, reportes o comentarios del servicio.',
+              onTap: () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const BuzonPage()));
+              },
             ),
             if (servicios.isNotEmpty) ...[
               const SectionTitle('Último servicio'),
@@ -734,7 +683,143 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-/* ======================= DATOS ======================= */
+// ======================= BUZÓN =======================
+
+class BuzonPage extends StatefulWidget {
+  const BuzonPage({super.key});
+
+  @override
+  State<BuzonPage> createState() => _BuzonPageState();
+}
+
+class _BuzonPageState extends State<BuzonPage> {
+  final comentario = TextEditingController();
+  String tipoReporte = 'Sugerencia';
+
+  Future<void> enviar() async {
+    final texto = comentario.text.trim();
+
+    if (texto.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Escribe tu comentario antes de enviarlo')),
+      );
+      return;
+    }
+
+    await Repo.guardarSugerencia('[$tipoReporte] $texto');
+    comentario.clear();
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Reporte enviado correctamente')),
+    );
+  }
+
+  void limpiar() {
+    setState(() {
+      tipoReporte = 'Sugerencia';
+      comentario.clear();
+    });
+  }
+
+  @override
+  void dispose() {
+    comentario.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Buzón de sugerencias'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          AppCard(
+            color: AppColors.softGreen,
+            child: Column(
+              children: const [
+                Icon(Icons.feedback, size: 72, color: AppColors.green),
+                SizedBox(height: 12),
+                Text(
+                  'Tu opinión ayuda a mejorar el servicio',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Envía reportes, quejas o sugerencias sobre la recolección de basura.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16.5),
+                ),
+              ],
+            ),
+          ),
+          const SectionTitle('Tipo de reporte'),
+          DropdownButtonFormField<String>(
+            value: tipoReporte,
+            decoration: const InputDecoration(
+              labelText: 'Selecciona una opción',
+              prefixIcon: Icon(Icons.category),
+            ),
+            items: const [
+              DropdownMenuItem(value: 'Sugerencia', child: Text('Sugerencia')),
+              DropdownMenuItem(value: 'Queja', child: Text('Queja')),
+              DropdownMenuItem(value: 'Retraso del camión', child: Text('Retraso del camión')),
+              DropdownMenuItem(value: 'Camión no pasó', child: Text('Camión no pasó')),
+              DropdownMenuItem(value: 'Basura no recolectada', child: Text('Basura no recolectada')),
+            ],
+            onChanged: (value) {
+              setState(() {
+                tipoReporte = value ?? 'Sugerencia';
+              });
+            },
+          ),
+          const SectionTitle('Describe el problema'),
+          TextField(
+            controller: comentario,
+            minLines: 5,
+            maxLines: 8,
+            decoration: const InputDecoration(
+              labelText: 'Comentario',
+              hintText: 'Ejemplo: el camión no pasó por mi domicilio el día indicado',
+              prefixIcon: Icon(Icons.edit_note),
+            ),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 54,
+            child: FilledButton.icon(
+              onPressed: enviar,
+              icon: const Icon(Icons.send),
+              label: const Text(
+                'Enviar reporte',
+                style: TextStyle(fontSize: 17),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 54,
+            child: OutlinedButton.icon(
+              onPressed: limpiar,
+              icon: const Icon(Icons.cleaning_services),
+              label: const Text(
+                'Limpiar formulario',
+                style: TextStyle(fontSize: 17),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ======================= DATOS =======================
 
 class DatosPage extends StatefulWidget {
   const DatosPage({super.key});
@@ -1063,7 +1148,7 @@ class _DatosPageState extends State<DatosPage> with SingleTickerProviderStateMix
   }
 }
 
-/* ======================= SEGUIMIENTO ======================= */
+// ======================= SEGUIMIENTO =======================
 
 enum EventoCamion { normal, retraso, averia }
 
@@ -1543,7 +1628,7 @@ class _SeguimientoPageState extends State<SeguimientoPage> {
   }
 }
 
-/* ======================= GUÍA ======================= */
+// ======================= GUÍA =======================
 
 class GuiaPage extends StatelessWidget {
   const GuiaPage({super.key});
