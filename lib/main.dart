@@ -1640,6 +1640,7 @@ class GuiaPage extends StatelessWidget {
     String detalle,
     IconData icono,
     Color color,
+    String imagen,
   ) {
     return Card(
       child: ListTile(
@@ -1648,7 +1649,10 @@ class GuiaPage extends StatelessWidget {
           backgroundColor: color.withOpacity(0.12),
           child: Icon(icono, color: color),
         ),
-        title: Text(titulo, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+        title: Text(
+          titulo,
+          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+        ),
         subtitle: Text(ejemplo),
         trailing: const Icon(Icons.arrow_forward_ios, size: 18),
         onTap: () {
@@ -1660,6 +1664,7 @@ class GuiaPage extends StatelessWidget {
                 detalle: detalle,
                 icono: icono,
                 color: color,
+                imagen: imagen,
               ),
             ),
           );
@@ -1688,6 +1693,7 @@ class GuiaPage extends StatelessWidget {
             'Son residuos naturales. Separarlos ayuda a hacer composta y evita malos olores.',
             Icons.eco,
             AppColors.green,
+            'assets/images/Organico.jpeg',
           ),
           basuraCard(
             context,
@@ -1696,6 +1702,7 @@ class GuiaPage extends StatelessWidget {
             'Pueden volver a usarse. Separarlos reduce basura y ayuda al medio ambiente.',
             Icons.recycling,
             Colors.blue,
+            'assets/images/Reciclables.jpeg',
           ),
           basuraCard(
             context,
@@ -1704,6 +1711,7 @@ class GuiaPage extends StatelessWidget {
             'Deben ir separados porque pueden tener bacterias y no se reciclan.',
             Icons.delete,
             Colors.purple,
+            'assets/images/Sanitarios.jpeg',
           ),
           basuraCard(
             context,
@@ -1712,6 +1720,7 @@ class GuiaPage extends StatelessWidget {
             'No deben mezclarse porque contaminan mucho y necesitan manejo especial.',
             Icons.warning,
             AppColors.orange,
+            'assets/images/Especiales.jpeg',
           ),
         ],
       ),
@@ -1724,6 +1733,7 @@ class DetalleGuiaPage extends StatelessWidget {
   final String detalle;
   final IconData icono;
   final Color color;
+  final String imagen;
 
   const DetalleGuiaPage({
     super.key,
@@ -1731,37 +1741,72 @@ class DetalleGuiaPage extends StatelessWidget {
     required this.detalle,
     required this.icono,
     required this.color,
+    required this.imagen,
   });
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(titulo)),
-      body: Padding(
+      body: ListView(
         padding: const EdgeInsets.all(24),
-        child: AppCard(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircleAvatar(
-                radius: 48,
-                backgroundColor: color.withOpacity(0.12),
-                child: Icon(icono, size: 58, color: color),
-              ),
-              const SizedBox(height: 20),
-              Text(
-                titulo,
-                style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                detalle,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 20, height: 1.4),
-              ),
-            ],
+        children: [
+          AppCard(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircleAvatar(
+                  radius: 48,
+                  backgroundColor: color.withOpacity(0.12),
+                  child: Icon(icono, size: 58, color: color),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  titulo,
+                  style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  detalle,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 20, height: 1.4),
+                ),
+              ],
+            ),
           ),
-        ),
+          const SizedBox(height: 16),
+          AppCard(
+            child: Column(
+              children: [
+                const Text(
+                  'Apoyo visual',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: Image.asset(
+                    imagen,
+                    width: double.infinity,
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        height: 220,
+                        alignment: Alignment.center,
+                        color: Colors.grey.shade200,
+                        child: const Text(
+                          'No se encontró la imagen.\nRevisa assets/images/',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 18),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
