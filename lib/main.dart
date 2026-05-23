@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -681,6 +682,102 @@ class AppCard extends StatelessWidget {
   }
 }
 
+
+// =======================================================
+// API SERVICE - CONEXIÓN CON BACKEND FASTAPI
+// =======================================================
+
+class ApiSession {
+  static String? token;
+  static Map<String, dynamic>? user;
+
+  static String get role => (user?['role'] ?? '').toString().toLowerCase();
+  static String get name => (user?['name'] ?? 'Usuario').toString();
+  static String get email => (user?['email'] ?? '').toString();
+
+  static void save({required String accessToken, required Map<String, dynamic> userData}) {
+    token = accessToken;
+    user = userData;
+  }
+
+  static void clear() {
+    token = null;
+    user = null;
+  }
+}
+
+class ApiService {
+  // Chrome en la misma computadora donde corre FastAPI.
+  static const String apiBase = 'http://127.0.0.1:8000';
+
+  static Future<Map<String, dynamic>> login({
+    required String email,
+    required String password,
+  }) async {
+    final uri = Uri.parse('$apiBase/auth/login');
+
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'email': email.trim().toLowerCase(),
+        'password': password.trim(),
+      }),
+    ).timeout(const Duration(seconds: 8));
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      String message = 'No se pudo iniciar sesión.';
+      try {
+        final data = jsonDecode(response.body);
+        message = data['detail']?.toString() ?? message;
+      } catch (_) {}
+      throw Exception(message);
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final token = data['access_token']?.toString();
+    final user = Map<String, dynamic>.from(data['user'] ?? {});
+
+    if (token == null || token.isEmpty || user.isEmpty) {
+      throw Exception('Respuesta inválida del servidor.');
+    }
+
+    ApiSession.save(accessToken: token, userData: user);
+    return data;
+  }
+
+  static Map<String, String> authHeaders() {
+    return {
+      'Content-Type': 'application/json',
+      if (ApiSession.token != null) 'Authorization': 'Bearer ${ApiSession.token}',
+    };
+  }
+
+  static Future<bool> health() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$apiBase/public/health'))
+          .timeout(const Duration(seconds: 4));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<Map<String, dynamic>> adminDashboard() async {
+    final response = await http.get(
+      Uri.parse('$apiBase/admin/dashboard'),
+      headers: authHeaders(),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('No se pudo cargar dashboard admin');
+    }
+
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+}
+
 // =======================================================
 // LOGIN
 // =======================================================
@@ -695,8 +792,14 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final email = TextEditingController();
   final pass = TextEditingController();
+  bool loading = false;
 
-  void entrar() {
+  bool correoValido(String value) {
+    final regex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+    return regex.hasMatch(value.trim());
+  }
+
+  Future<void> entrar() async {
     final correo = email.text.trim().toLowerCase();
     final password = pass.text.trim();
 
@@ -707,26 +810,53 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
 
-    if (correo == 'operador@demo.com' && password == '123456') {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const OperadorPage()),
+    if (!correoValido(correo)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ingresa un correo válido. Ejemplo: demo@correo.com')),
       );
       return;
     }
 
-    if (correo == 'admin@demo.com' && password == '123456') {
+    setState(() => loading = true);
+
+    try {
+      await ApiService.login(email: correo, password: password);
+
+      if (!mounted) return;
+
+      final role = ApiSession.role;
+
+      if (role == 'operador') {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const OperadorPage()),
+        );
+        return;
+      }
+
+      if (role == 'admin') {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const AdminPage()),
+        );
+        return;
+      }
+
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const AdminPage()),
+        MaterialPageRoute(builder: (_) => const HomePage()),
       );
-      return;
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error de login: ${e.toString().replaceFirst('Exception: ', '')}'),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => loading = false);
     }
-
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const HomePage()),
-    );
   }
 
   @override
@@ -770,6 +900,29 @@ class _LoginPageState extends State<LoginPage> {
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 17, height: 1.35),
                   ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppColors.green.withOpacity(0.25)),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.api, color: AppColors.green, size: 20),
+                        SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            'Login conectado al backend FastAPI',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                   const SizedBox(height: 24),
                   TextField(
                     controller: email,
@@ -792,9 +945,18 @@ class _LoginPageState extends State<LoginPage> {
                     height: 56,
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: entrar,
-                      icon: const Icon(Icons.login),
-                      label: const Text('Iniciar sesión', style: TextStyle(fontSize: 18)),
+                      onPressed: loading ? null : () => entrar(),
+                      icon: loading
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.login),
+                      label: Text(
+                        loading ? 'Conectando...' : 'Iniciar sesión',
+                        style: const TextStyle(fontSize: 18),
+                      ),
                     ),
                   ),
                   TextButton(
@@ -902,6 +1064,7 @@ class _HomePageState extends State<HomePage> {
           IconButton(
             tooltip: 'Cerrar sesión',
             onPressed: () {
+              ApiSession.clear();
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(builder: (_) => const LoginPage()),
@@ -1528,6 +1691,7 @@ class _DatosPageState extends State<DatosPage> with SingleTickerProviderStateMix
           IconButton(
             tooltip: 'Cerrar sesión',
             onPressed: () {
+              ApiSession.clear();
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(builder: (_) => const LoginPage()),
@@ -2579,6 +2743,7 @@ class _OperadorPageState extends State<OperadorPage> {
             tooltip: 'Cerrar sesión',
             onPressed: () {
               timer?.cancel();
+              ApiSession.clear();
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(builder: (_) => const LoginPage()),
